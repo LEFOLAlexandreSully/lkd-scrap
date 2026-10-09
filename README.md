@@ -20,6 +20,21 @@ This extension extracts the current LinkedIn profile data visible on the page an
 5. Open a public LinkedIn profile page, then click the extension icon.
 6. Press Extract data.
 
+## Package for distribution
+
+Run the following command in PowerShell from the project folder to create a ZIP
+containing the extension files (without development dependencies or tests):
+
+```powershell
+New-Item -ItemType Directory -Force dist | Out-Null
+Compress-Archive -Path manifest.json, content.js, popup.html, popup.js, styles.css `
+  -DestinationPath dist\lkd-scrap-1.0.0.zip -Force
+```
+
+Share the ZIP with users. To load it manually, extract it and select the extracted
+folder from `edge://extensions` > **Load unpacked**. Update the version in
+`manifest.json` and the ZIP filename when preparing a new release.
+
 ## Notes
 
 - This is intended for personal use and should comply with LinkedIn's terms and your local privacy requirements.
