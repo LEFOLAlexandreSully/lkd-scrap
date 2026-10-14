@@ -3,14 +3,46 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const { JSDOM } = require('jsdom');
 
 const contentScript = fs.readFileSync(path.join(__dirname, '..', 'target-app.js'), 'utf8');
 
-function runContentScript(html, data, setupDom = () => {}) {
-  const dom = new JSDOM(html, { url: 'https://app.example.test/' });
-  setupDom(dom.window.document);
+async function runContentScript(data, { databaseExists = true, storeExists = true, keyPath = 'id' } = {}) {
   let messageListener;
+  let insertedRecord;
+  let openedDatabase = false;
+  const database = {
+    objectStoreNames: storeExists ? ['candidates'] : [],
+    close() {},
+    transaction() {
+      let completeHandler;
+      const transaction = {
+        objectStore() {
+          return {
+            keyPath,
+            add(record) {
+              insertedRecord = record;
+            },
+          };
+        }
+      };
+      Object.defineProperty(transaction, 'oncomplete', {
+        set(handler) {
+          completeHandler = handler;
+          setTimeout(() => completeHandler?.(), 0);
+        }
+      });
+      return transaction;
+    }
+  };
+  const indexedDB = {
+    databases: async () => databaseExists ? [{ name: 'candidates' }] : [],
+    open() {
+      openedDatabase = true;
+      const request = { result: database };
+      setTimeout(() => request.onsuccess(), 0);
+      return request;
+    }
+  };
   const context = {
     chrome: {
       runtime: {
@@ -21,56 +53,69 @@ function runContentScript(html, data, setupDom = () => {}) {
         }
       }
     },
-    document: dom.window.document,
-    Event: dom.window.Event,
-    HTMLInputElement: dom.window.HTMLInputElement,
-    HTMLTextAreaElement: dom.window.HTMLTextAreaElement
+    indexedDB,
+    crypto: { randomUUID: () => '00087c53-5bca-44f3-99cd-d76ed24db5c5' },
+    setTimeout
   };
 
   vm.runInNewContext(contentScript, context);
-  let response;
-  messageListener({ action: 'fillProfile', data }, {}, (value) => {
-    response = value;
+  const response = await new Promise((resolve) => {
+    messageListener({ action: 'saveProfileToDatabase', data }, {}, resolve);
   });
 
-  return { dom, response };
+  return { response, insertedRecord, openedDatabase };
 }
 
-test('fills the matching name, firstName, and jobTitle fields and dispatches form events', () => {
-  const eventCounts = { input: 0, change: 0 };
-  const { dom, response } = runContentScript(`
-    <input name="lastName">
-    <input name="firstName">
-    <textarea name="jobTitle"></textarea>
-  `, {
+test('inserts the profile into the candidates store with a generated UUID and mapped position', async () => {
+  const { response, insertedRecord } = await runContentScript({
     firstName: 'Ada',
     lastName: 'Lovelace',
     jobTitle: 'Engineer'
-  }, (document) => {
-    for (const field of document.querySelectorAll('input, textarea')) {
-      field.addEventListener('input', () => eventCounts.input++);
-      field.addEventListener('change', () => eventCounts.change++);
-    }
   });
-  const { document } = dom.window;
 
   assert.equal(response.success, true);
-  assert.equal(document.querySelector('[name="firstName"]').value, 'Ada');
-  assert.equal(document.querySelector('[name="lastName"]').value, 'Lovelace');
-  assert.equal(document.querySelector('[name="jobTitle"]').value, 'Engineer');
-  assert.deepEqual(eventCounts, { input: 3, change: 3 });
-  dom.window.close();
+  assert.equal(response.id, '00087c53-5bca-44f3-99cd-d76ed24db5c5');
+  assert.deepEqual(JSON.parse(JSON.stringify(insertedRecord)), {
+    id: response.id,
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    position: 'Engineer'
+  });
 });
 
-test('reports the names of form fields that are missing', () => {
-  const { dom, response } = runContentScript('<input name="firstName">', {
+test('does not create a database when the company database is absent', async () => {
+  const { response, insertedRecord, openedDatabase } = await runContentScript({
     firstName: 'Ada',
     lastName: 'Lovelace',
     jobTitle: 'Engineer'
-  });
+  }, { databaseExists: false });
 
   assert.equal(response.success, false);
-  assert.match(response.error, /lastName, jobTitle/);
-  assert.equal(dom.window.document.querySelector('[name="firstName"]').value, 'Ada');
-  dom.window.close();
+  assert.match(response.error, /IndexedDB "candidates" was not found/);
+  assert.equal(openedDatabase, false);
+  assert.equal(insertedRecord, undefined);
+});
+
+test('reports when the expected object store is missing', async () => {
+  const { response, insertedRecord } = await runContentScript({
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    jobTitle: 'Engineer'
+  }, { storeExists: false });
+
+  assert.equal(response.success, false);
+  assert.match(response.error, /Object store "candidates" was not found/);
+  assert.equal(insertedRecord, undefined);
+});
+
+test('rejects a store with a different primary key path', async () => {
+  const { response, insertedRecord } = await runContentScript({
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    jobTitle: 'Engineer'
+  }, { keyPath: 'candidateId' });
+
+  assert.equal(response.success, false);
+  assert.match(response.error, /must use "id" as its key path/);
+  assert.equal(insertedRecord, undefined);
 });

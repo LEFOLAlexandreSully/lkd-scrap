@@ -37,6 +37,16 @@ button {
   color: white;
 }
 
+.save-btn {
+  background: #15803d;
+  color: white;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .secondary-btn {
   background: #e5e7eb;
   color: #111827;

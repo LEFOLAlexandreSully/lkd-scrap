@@ -1,62 +1,84 @@
-function setFieldValue(field, value) {
-  const prototype = field instanceof HTMLTextAreaElement
-    ? HTMLTextAreaElement.prototype
-    : HTMLInputElement.prototype;
-  const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+(() => {
+  const listenerKey = '__linkedinProfileDatabaseListenerInstalled';
+  if (globalThis[listenerKey]) return;
+  globalThis[listenerKey] = true;
 
-  if (valueSetter) {
-    valueSetter.call(field, value);
-  } else {
-    field.value = value;
+  const databaseName = 'candidates';
+  const storeName = 'candidates';
+
+  function requestResult(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('IndexedDB request failed.'));
+    });
   }
 
-  field.dispatchEvent(new Event('input', { bubbles: true }));
-  field.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-function fillProfileForm(profile) {
-  const fields = [
-    ['firstName', profile.firstName],
-    ['lastName', profile.lastName],
-    ['jobTitle', profile.jobTitle]
-  ];
-  const missingFields = [];
-
-  for (const [name, value] of fields) {
-    const field = document.querySelector(
-      `input[name="${name}"], textarea[name="${name}"]`
-    );
-
-    if (!field) {
-      missingFields.push(name);
-      continue;
-    }
-
-    setFieldValue(field, value || '');
+  function transactionCompletion(transaction) {
+    return new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction was aborted.'));
+      transaction.onerror = () => reject(transaction.error || new Error('IndexedDB transaction failed.'));
+    });
   }
 
-  if (missingFields.length) {
-    throw new Error(`Form fields not found: ${missingFields.join(', ')}`);
-  }
-
-  return { firstName: profile.firstName, lastName: profile.lastName, jobTitle: profile.jobTitle };
-}
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action !== 'fillProfile') {
-    return false;
-  }
-
-  try {
-    if (!message.data || typeof message.data !== 'object') {
+  async function saveProfile(profile) {
+    if (!profile || typeof profile !== 'object') {
       throw new Error('Profile data is missing.');
     }
+    for (const field of ['firstName', 'lastName', 'jobTitle']) {
+      if (typeof profile[field] !== 'string') {
+        throw new Error(`Profile field "${field}" is missing or invalid.`);
+      }
+    }
+    if (typeof indexedDB.databases !== 'function') {
+      throw new Error('This browser cannot verify that the company database already exists.');
+    }
 
-    fillProfileForm(message.data);
-    sendResponse({ success: true });
-  } catch (error) {
-    sendResponse({ success: false, error: String(error.message || error) });
+    const databases = await indexedDB.databases();
+    if (!databases.some((database) => database.name === databaseName)) {
+      throw new Error(`IndexedDB "${databaseName}" was not found on this site. Open the company app and try again.`);
+    }
+
+    const database = await requestResult(indexedDB.open(databaseName));
+    try {
+      if (!Array.from(database.objectStoreNames).includes(storeName)) {
+        throw new Error(`Object store "${storeName}" was not found in IndexedDB "${databaseName}".`);
+      }
+
+      const checkTransaction = database.transaction(storeName, 'readonly');
+      const keyPath = checkTransaction.objectStore(storeName).keyPath;
+      await transactionCompletion(checkTransaction);
+      if (keyPath !== 'id') {
+        throw new Error(`Object store "${storeName}" must use "id" as its key path.`);
+      }
+
+      const transaction = database.transaction(storeName, 'readwrite');
+      const completed = transactionCompletion(transaction);
+      const id = crypto.randomUUID();
+      transaction.objectStore(storeName).add({
+        id,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        position: profile.jobTitle
+      });
+      await completed;
+      return id;
+    } finally {
+      database.close();
+    }
   }
 
-  return false;
-});
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action !== 'saveProfileToDatabase') {
+      return false;
+    }
+
+    saveProfile(message.data)
+      .then((id) => sendResponse({ success: true, id }))
+      .catch((error) => sendResponse({
+        success: false,
+        error: String(error.message || error)
+      }));
+    return true;
+  });
+})();
