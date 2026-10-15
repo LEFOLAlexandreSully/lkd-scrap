@@ -2,7 +2,8 @@
   "name": "lkd-scrap",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"

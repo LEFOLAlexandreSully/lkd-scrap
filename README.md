@@ -36,18 +36,18 @@ session so it remains available after switching tabs.
 
 ## Package for distribution
 
-Run the following command in PowerShell from the project folder to create a ZIP
-containing the extension files (without development dependencies or tests):
+Run the following command from the project folder to create a ZIP containing
+only the extension files (without development dependencies or tests):
 
-```powershell
-New-Item -ItemType Directory -Force dist | Out-Null
-Compress-Archive -Path manifest.json, content.js, target-app.js, popup.html, popup.js, styles.css `
-  -DestinationPath dist\lkd-scrap-1.1.0.zip -Force
+```sh
+npm run package
 ```
 
-Share the ZIP with users. To load it manually, extract it and select the extracted
-folder from `edge://extensions` > **Load unpacked**. Update the version in
-`manifest.json` and the ZIP filename when preparing a new release.
+The ZIP is created in `dist/` and its filename uses the version in
+`manifest.json` (for example, `dist/lkd-scrap-1.1.0.zip`). Share that file with
+users. To load it manually, they must extract it and select the extracted folder
+from `edge://extensions` > **Load unpacked**. Update the version in
+`manifest.json` before preparing a new release.
 
 ## Notes
 
